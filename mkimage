@@ -17,7 +17,28 @@ exec 2> >(tee -ia "$LOGFILE" >&2)
 
 DEBOOTSTRAP_DIR=$(mktemp -d)
 cp -a /usr/share/debootstrap/* "$DEBOOTSTRAP_DIR"
-cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR"
+
+# Update keyring to support Debian Trixie and other recent releases
+echo "Updating Debian archive keyring for latest releases..."
+{
+    # Try to update the system keyring package first
+    apt-get update -qq && apt-get install -y --no-install-recommends debian-archive-keyring
+    cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR"
+    echo "Successfully updated keyring from system package"
+} || {
+    echo "System keyring update failed, trying fallback methods..." >&2
+    # Fallback: try to get the keyring from Debian directly
+    wget -O "$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg" \
+        "https://ftp-master.debian.org/keys/archive-key-12.gpg" 2>/dev/null || \
+    {
+        echo "All keyring update methods failed, using system keyring" >&2
+        cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR" 2>/dev/null || {
+            echo "ERROR: Cannot find any Debian keyring!" >&2
+            exit 1
+        }
+    }
+}
+
 cp -a "${ROOT}/debootstrap/"* "${DEBOOTSTRAP_DIR}/scripts"
 
 KEYRING=$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg
