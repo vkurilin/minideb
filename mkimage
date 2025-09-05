@@ -17,7 +17,52 @@ exec 2> >(tee -ia "$LOGFILE" >&2)
 
 DEBOOTSTRAP_DIR=$(mktemp -d)
 cp -a /usr/share/debootstrap/* "$DEBOOTSTRAP_DIR"
-cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR"
+
+# Ensure pkgdetails is available for debootstrap
+if command -v pkgdetails >/dev/null 2>&1; then
+    # Copy pkgdetails binary if available
+    cp "$(which pkgdetails)" "$DEBOOTSTRAP_DIR/"
+    chmod +x "$DEBOOTSTRAP_DIR/pkgdetails"
+elif command -v perl >/dev/null 2>&1; then
+    # Create a perl wrapper if pkgdetails binary not available but perl is
+    echo '#!/usr/bin/perl' > "$DEBOOTSTRAP_DIR/pkgdetails"
+    echo 'exec "/usr/bin/perl", "/usr/share/debootstrap/pkgdetails.pl", @ARGV;' >> "$DEBOOTSTRAP_DIR/pkgdetails"
+    chmod +x "$DEBOOTSTRAP_DIR/pkgdetails"
+else
+    echo "Warning: Neither pkgdetails nor perl available for debootstrap" >&2
+fi
+
+# Download complete Debian keyring with all keys including Trixie
+echo "Downloading complete Debian archive keyring..."
+KEYRING_TEMP=$(mktemp)
+{
+    # Download the complete Debian archive keyring from official source
+    wget -O "$KEYRING_TEMP" "https://ftp-master.debian.org/keys/archive-key-12.asc" 2>/dev/null && \
+    wget -O "${KEYRING_TEMP}.13" "https://ftp-master.debian.org/keys/release-13.asc" 2>/dev/null && \
+    {
+        # Combine multiple keys into one keyring
+        cat "$KEYRING_TEMP" "${KEYRING_TEMP}.13" > "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc"
+        # Convert ASCII armored keys to GPG format
+        gpg --batch --yes --dearmor < "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc" > "$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg" 2>/dev/null || \
+        cp "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc" "$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg"
+        rm -f "$KEYRING_TEMP" "${KEYRING_TEMP}.13" "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc"
+        echo "Successfully downloaded and processed Debian keyring"
+    }
+} || {
+    echo "Download failed, trying system keyring update..." >&2
+    {
+        apt-get update -qq && apt-get install -y --no-install-recommends debian-archive-keyring
+        cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR"
+        echo "Using updated system keyring"
+    } || {
+        echo "All keyring methods failed, using existing system keyring" >&2
+        cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR" 2>/dev/null || {
+            echo "ERROR: Cannot find any Debian keyring!" >&2
+            exit 1
+        }
+    }
+}
+
 cp -a "${ROOT}/debootstrap/"* "${DEBOOTSTRAP_DIR}/scripts"
 
 KEYRING=$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg
@@ -76,7 +121,7 @@ sec_repo_url_1="${repo_url}-security"
 sec_repo_url_2="http://security.debian.org/debian-security"
 
 echo -e "deb ${repo_url} $DIST main" > "$rootfsDir/etc/apt/sources.list"
-if [ "$DIST" == "bookworm" ]; then
+if [ "$DIST" == "trixie" ] || [ "$DIST" == "bookworm" ]; then
     echo "deb ${repo_url} $DIST-updates main" >> "$rootfsDir/etc/apt/sources.list"
     echo "deb ${sec_repo_url_1} $DIST-security main" >> "$rootfsDir/etc/apt/sources.list"
 elif [ "$DIST" == "bullseye" ]; then
