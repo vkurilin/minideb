@@ -18,20 +18,30 @@ exec 2> >(tee -ia "$LOGFILE" >&2)
 DEBOOTSTRAP_DIR=$(mktemp -d)
 cp -a /usr/share/debootstrap/* "$DEBOOTSTRAP_DIR"
 
-# Update keyring to support Debian Trixie and other recent releases
-echo "Updating Debian archive keyring for latest releases..."
+# Download complete Debian keyring with all keys including Trixie
+echo "Downloading complete Debian archive keyring..."
+KEYRING_TEMP=$(mktemp)
 {
-    # Try to update the system keyring package first
-    apt-get update -qq && apt-get install -y --no-install-recommends debian-archive-keyring
-    cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR"
-    echo "Successfully updated keyring from system package"
-} || {
-    echo "System keyring update failed, trying fallback methods..." >&2
-    # Fallback: try to get the keyring from Debian directly
-    wget -O "$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg" \
-        "https://ftp-master.debian.org/keys/archive-key-12.gpg" 2>/dev/null || \
+    # Download the complete Debian archive keyring from official source
+    wget -O "$KEYRING_TEMP" "https://ftp-master.debian.org/keys/archive-key-12.asc" 2>/dev/null && \
+    wget -O "${KEYRING_TEMP}.13" "https://ftp-master.debian.org/keys/release-13.asc" 2>/dev/null && \
     {
-        echo "All keyring update methods failed, using system keyring" >&2
+        # Combine multiple keys into one keyring
+        cat "$KEYRING_TEMP" "${KEYRING_TEMP}.13" > "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc"
+        # Convert ASCII armored keys to GPG format
+        gpg --batch --yes --dearmor < "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc" > "$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg" 2>/dev/null || \
+        cp "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc" "$DEBOOTSTRAP_DIR/debian-archive-keyring.gpg"
+        rm -f "$KEYRING_TEMP" "${KEYRING_TEMP}.13" "$DEBOOTSTRAP_DIR/debian-archive-keyring.asc"
+        echo "Successfully downloaded and processed Debian keyring"
+    }
+} || {
+    echo "Download failed, trying system keyring update..." >&2
+    {
+        apt-get update -qq && apt-get install -y --no-install-recommends debian-archive-keyring
+        cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR"
+        echo "Using updated system keyring"
+    } || {
+        echo "All keyring methods failed, using existing system keyring" >&2
         cp -a /usr/share/keyrings/debian-archive-keyring.gpg "$DEBOOTSTRAP_DIR" 2>/dev/null || {
             echo "ERROR: Cannot find any Debian keyring!" >&2
             exit 1
