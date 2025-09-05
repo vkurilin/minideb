@@ -18,6 +18,20 @@ exec 2> >(tee -ia "$LOGFILE" >&2)
 DEBOOTSTRAP_DIR=$(mktemp -d)
 cp -a /usr/share/debootstrap/* "$DEBOOTSTRAP_DIR"
 
+# Ensure pkgdetails is available for debootstrap
+if command -v pkgdetails >/dev/null 2>&1; then
+    # Copy pkgdetails binary if available
+    cp "$(which pkgdetails)" "$DEBOOTSTRAP_DIR/"
+    chmod +x "$DEBOOTSTRAP_DIR/pkgdetails"
+elif command -v perl >/dev/null 2>&1; then
+    # Create a perl wrapper if pkgdetails binary not available but perl is
+    echo '#!/usr/bin/perl' > "$DEBOOTSTRAP_DIR/pkgdetails"
+    echo 'exec "/usr/bin/perl", "/usr/share/debootstrap/pkgdetails.pl", @ARGV;' >> "$DEBOOTSTRAP_DIR/pkgdetails"
+    chmod +x "$DEBOOTSTRAP_DIR/pkgdetails"
+else
+    echo "Warning: Neither pkgdetails nor perl available for debootstrap" >&2
+fi
+
 # Download complete Debian keyring with all keys including Trixie
 echo "Downloading complete Debian archive keyring..."
 KEYRING_TEMP=$(mktemp)
